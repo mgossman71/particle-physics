@@ -22,7 +22,31 @@ Interactive particle simulation running at 60fps in the browser, compiled from R
 +-----------------------------------------------------------+
 ```
 
-**Open at:** http://127.0.0.1:3000
+**Open at:** http://localhost:8080 (Docker) or http://127.0.0.1:3000 (`cargo leptos serve`)
+
+---
+
+## Run with Docker Compose (easiest)
+
+No local Rust toolchain needed:
+
+```bash
+docker compose up -d --build
+```
+
+Open http://localhost:8080. The first build takes a while because it compiles `cargo-leptos`, the server binary and the WASM bundle. Later rebuilds reuse the cached `cargo-leptos` layer.
+
+| Command | What it does |
+|---------|-------------|
+| `docker compose up -d --build` | Build the image and start the container |
+| `docker compose logs -f` | Follow server logs (should show `listening on http://0.0.0.0:3000`) |
+| `docker compose down` | Stop and remove the container |
+
+How the image works:
+- **Build stage** (`rust:1.99-slim-bookworm`) builds `cargo-leptos` 0.3.11 from source, adds the `wasm32-unknown-unknown` target and runs `cargo leptos build --release`. LTO is turned off for both `cargo-leptos` and the `wasm-release` profile so the build fits in an 8 GB Docker VM. The WASM is a little larger as a result.
+- **Runtime stage** (`debian:bookworm-slim`) holds only the server binary and `target/site/`, and runs as a non-root `appuser`.
+- **Port:** the container listens on 3000, and compose publishes it on host port **8080**.
+- **Config:** the binary reads `LEPTOS_*` environment variables at startup (`get_configuration(None)`). The `[package.metadata.leptos]` section of `Cargo.toml` only applies under `cargo leptos`. The Dockerfile sets `LEPTOS_SITE_ADDR=0.0.0.0:3000` and `LEPTOS_ENV=PROD`. Without those, the server binds `127.0.0.1` inside the container, which can't be reached from the host, and it injects the dev live-reload script.
 
 ---
 
@@ -120,6 +144,9 @@ Production output goes to `target/site/`.
 my-leptos-app/
   Cargo.toml              # Dependencies, features, leptos config
   rust-toolchain.toml     # Pins stable toolchain
+  Dockerfile              # Multi-stage build: cargo-leptos build -> slim runtime
+  docker-compose.yml      # Publishes the app on localhost:8080
+  .dockerignore
   .gitignore
   src/
     app.rs                # Components, signals, WASM simulation engine
@@ -171,9 +198,9 @@ fn start_simulation(...) {
     // ...
 }
 
-// Stub so SSR binary compiles cleanly
+// Stub so SSR binary compiles cleanly (returns false = not started)
 #[cfg(not(feature = "hydrate"))]
-fn try_start(...) {}
+fn try_start(...) -> bool { false }
 ```
 
 ### 2. NodeRef for DOM element access
@@ -316,7 +343,7 @@ site-root = "target/site"
 site-pkg-dir = "pkg"
 style-file = "style/main.scss"
 assets-dir = "public"
-site-addr = "127.0.0.1:3000"
+site-addr = "0.0.0.0:3000"
 reload-port = 3001
 browserquery = "defaults"
 env = "DEV"
@@ -339,6 +366,10 @@ lib-profile-release = "wasm-release"
 | `set_untracked` not found | Method does not exist in Leptos 0.8 RwSignal | Use .set() - works fine outside reactive context |
 | `no method inner_width on Window` | Missing Window in web-sys features | Add Window to [dependencies.web-sys] features |
 | `js-sys` / `web-sys` not found at SSR build | Not marked optional = true + not in hydrate feature only | Add optional = true and put them in hydrate feature list only |
+| Docker container is "healthy" but `localhost:8080` resets the connection | Server bound `127.0.0.1` because no `LEPTOS_SITE_ADDR` was set at runtime (the healthcheck runs inside the container, so it still passes) | Set `LEPTOS_SITE_ADDR=0.0.0.0:3000` in the runtime image (already done in the Dockerfile) |
+| Docker build killed / OOM during linking | `lto = true` + `codegen-units = 1` on a large dependency tree | Turn LTO off (see the Dockerfile overrides) or give Docker more memory |
+| Browser shows a different app | Something else is already using port 3000 on the host | Use http://localhost:8080 for the Docker build, or change the host port in `docker-compose.yml` |
+| Old page after a rebuild | `/pkg/*` filenames aren't hashed, so the browser cached the old files | Hard refresh (Cmd/Ctrl+Shift+R) |
 | `Finished generating JS/WASM` but page shows old content | Server binary locked | Kill process: `Get-Process *my_leptos* | Stop-Process -Force` then restart |
 
 ---
@@ -410,7 +441,8 @@ See file in repository. Contains:
 - `App` component - router + stylesheet injection
 - `HomePage` component - canvas + controls + signals
 - `try_start()` - cfg-gated animation starter
-- `start_simulation()` - WASM-only animation loop (Closure + requestAnimationFrame)
+- `start_simulation()` - WASM-only animation loop (Closure + requestAnimationFrame); recolors particles when the palette changes
+- `hue_for()` - random hue for a palette
 - `new_particle()` - random particle constructor
 
 ---
