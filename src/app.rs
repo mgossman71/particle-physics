@@ -5,7 +5,7 @@ use leptos_router::{
     components::{Route, Router, Routes},
     StaticSegment,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -71,7 +71,6 @@ fn HomePage() -> impl IntoView {
     let color_scheme = RwSignal::new(0u8);
     let is_repel     = RwSignal::new(false);
     let fps          = RwSignal::new(0u32);
-    let hint_visible = RwSignal::new(true);
 
     let shared: Rc<RefCell<SimSettings>> = Rc::new(RefCell::new(SimSettings::default()));
     let mouse:  Rc<RefCell<Option<(f64,f64)>>> = Rc::new(RefCell::new(None));
@@ -87,8 +86,11 @@ fn HomePage() -> impl IntoView {
 
     let s_start = shared.clone();
     let m_start = mouse.clone();
+    let started = Rc::new(Cell::new(false));
     Effect::new(move |_| {
-        try_start(canvas_ref, s_start.clone(), m_start.clone(), fps);
+        if !started.get() {
+            started.set(try_start(canvas_ref, s_start.clone(), m_start.clone(), fps));
+        }
     });
 
 
@@ -152,14 +154,12 @@ fn HomePage() -> impl IntoView {
                     </div>
                 </div>
                 <div class="ctrl-row">
-                    <button class="mode-btn" class-repel=move || is_repel.get()
+                    <button class="mode-btn" class:repel=move || is_repel.get()
                         on:click=move |_| is_repel.update(|r| *r = !*r)
                     >{move || if is_repel.get() { "⊖ Repel" } else { "⊕ Attract" }}</button>
                 </div>
             </div>
-            <Show when=move || hint_visible.get()>
-                <div class="hint-pill">"🖱 Move your mouse to interact"</div>
-            </Show>
+            <div class="hint-pill">"🖱 Move your mouse to interact"</div>
         </div>
     }
 }
@@ -171,12 +171,14 @@ fn try_start(
     shared: Rc<RefCell<SimSettings>>,
     mouse: Rc<RefCell<Option<(f64, f64)>>>,
     fps: RwSignal<u32>,
-) {
+) -> bool {
     if let Some(el) = canvas_ref.get() {
         use web_sys::HtmlCanvasElement;
         let canvas: &HtmlCanvasElement = el.as_ref();
         start_simulation(canvas.clone(), shared, mouse, fps);
+        return true;
     }
+    false
 }
 
 #[cfg(not(feature = "hydrate"))]
@@ -185,7 +187,7 @@ fn try_start(
     _shared: Rc<RefCell<SimSettings>>,
     _mouse: Rc<RefCell<Option<(f64, f64)>>>,
     _fps: RwSignal<u32>,
-) {}
+) -> bool { false }
 
 // ── Color helpers ─────────────────────────────────────────────────────────
 fn particle_color(hue: f64, alpha: f64) -> String {
@@ -223,6 +225,7 @@ fn start_simulation(
     let mut last_time: f64 = 0.0;
     let mut frames: u32 = 0;
     let mut last_fps: f64 = 0.0;
+    let mut last_scheme = init_settings.color_scheme;
 
     let shared_c = shared.clone();
     let mouse_c  = mouse.clone();
@@ -260,6 +263,12 @@ fn start_simulation(
         }
         particles.truncate(settings.count);
 
+        // Recolor existing particles when the palette changes
+        if settings.color_scheme != last_scheme {
+            for p in particles.iter_mut() { p.hue = hue_for(settings.color_scheme); }
+            last_scheme = settings.color_scheme;
+        }
+
         // ── Clear with slight trail ──
         ctx.set_shadow_blur(0.0);
         ctx.set_fill_style(&JsValue::from_str("rgba(8,8,18,0.22)"));
@@ -286,8 +295,8 @@ fn start_simulation(
             if spd > max { p.vx = (p.vx / spd) * max; p.vy = (p.vy / spd) * max; }
             p.vx += (js_sys::Math::random() - 0.5) * 0.28 * settings.speed;
             p.vy += (js_sys::Math::random() - 0.5) * 0.28 * settings.speed;
-            p.x += p.vx * dt * settings.speed;
-            p.y += p.vy * dt * settings.speed;
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
             if p.x < 0.0  { p.x += cw; } if p.x > cw { p.x -= cw; }
             if p.y < 0.0  { p.y += ch; } if p.y > ch { p.y -= ch; }
         }
@@ -336,17 +345,22 @@ fn start_simulation(
 }
 
 #[cfg(feature = "hydrate")]
-fn new_particle(w: f64, h: f64, scheme: u8) -> Particle {
+fn hue_for(scheme: u8) -> f64 {
     let rnd = js_sys::Math::random;
-    let hue = match scheme {
+    match scheme {
         0 => 180.0 + rnd() * 120.0,
         1 => rnd() * 60.0,
         2 => 170.0 + rnd() * 70.0,
         _ => rnd() * 360.0,
-    };
+    }
+}
+
+#[cfg(feature = "hydrate")]
+fn new_particle(w: f64, h: f64, scheme: u8) -> Particle {
+    let rnd = js_sys::Math::random;
     Particle {
         x: rnd() * w, y: rnd() * h,
         vx: (rnd() - 0.5) * 1.8, vy: (rnd() - 0.5) * 1.8,
-        hue, size: 1.5 + rnd() * 2.5,
+        hue: hue_for(scheme), size: 1.5 + rnd() * 2.5,
     }
 }
