@@ -1,0 +1,27 @@
+# Compiled target directory
+target/
+
+# Generated site directory
+site/
+
+# Environment variables
+.env
+.env.local
+
+# Editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Rust
+*.pdb
+
+# Node (if using e2e tests)
+node_modules/
