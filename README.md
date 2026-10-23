@@ -1,6 +1,11 @@
 ﻿# Particle Physics - Rust + Leptos Full-Stack Web App
 
-Interactive particle simulation running at 60fps in the browser, compiled from Rust to WebAssembly via Leptos 0.8.
+Interactive particle simulation running at 60fps in the browser, compiled from Rust to WebAssembly via Leptos 0.8. It has two modes:
+
+- **✦ Plexus:** up to 2,500 glowing particles linked by lines and pushed around by the mouse. A spatial grid finds the links, lines are drawn in colour batches, and glows come from pre-rendered sprites with additive blending. The canvas renders sharply on HiDPI screens.
+- **☢ Reactor:** a toy nuclear fission chain reaction you control with rods, a coolant pump and SCRAM. It includes a three-minute operator-shift game and sound (see [Reactor mode](#reactor-mode)).
+
+Behind both modes the canvas is transparent and sits over a CSS background: a drifting, palette-tinted nebula, a two-depth parallax starfield, a vignette and film grain.
 
 ```
 +-----------------------------------------------------------+
@@ -13,9 +18,11 @@ Interactive particle simulation running at 60fps in the browser, compiled from R
 |      .--.        .           .--.                         |
 |                                                           |
 |                                   +--------------+        |
-|                                   | Particles  160|        |
+|                                   |[Plexus][Reactor]       |
+|                                   | Particles  300|        |
 |                                   | Link Range 115|        |
 |                                   | Speed      1.0|        |
+|                                   | Trails     62%|        |
 |                                   | [Neon][Fire][Ocean]   |
 |                                   |  [+ Attract]  |        |
 |                                   +--------------+        |
@@ -23,6 +30,43 @@ Interactive particle simulation running at 60fps in the browser, compiled from R
 ```
 
 **Open at:** http://localhost:8080 (Docker) or http://127.0.0.1:3000 (`cargo leptos serve`)
+
+---
+
+## Reactor mode
+
+Switch the panel to **☢ Reactor** to run a toy fission chain reaction:
+
+- **Fuel nuclei** (green) jostle and bounce off each other. When a **neutron** (blue streak) hits one, it may split. The nucleus is flung away glowing hot and turns grey (spent) until it refuels, and 2–3 new neutrons fly out. Hot nuclei hit their neighbours harder and pass the glow on.
+- Neutrons that miss lose speed with each bounce (moderation), and slow neutrons are much likelier to cause fission. Spent nuclei sometimes swallow neutrons (poisoning), and neutrons that reach the screen edge leak away.
+- **Control rods** hang from the top and absorb neutrons. Lowering them is how you slow the reaction. **SCRAM** drops them all the way in at once.
+- The HUD shows status (shutdown / subcritical / critical / supercritical), core temperature, power in fissions per second, neutron count and the actual rod position. The blue Cherenkov glow behind the core brightens with power.
+- Above 1200°C the core **melts down**: alarms flash, the screen shakes and the reactor auto-SCRAMs. You can't reset it until the core cools below 700°C.
+- Click anywhere to fire a burst of neutrons.
+- **Coolant pump:** more flow cools the core faster but uses up to 12% of the electrical output.
+- **Xenon-135 poisoning:** fission makes iodine, which decays into neutron-absorbing xenon. Running at power burns xenon off. Cutting power stops the burn-off, so xenon piles up and the core goes sluggish for a while (the "xenon pit").
+
+### Operator shift (the game)
+
+Press **▶ Start shift** in the reactor HUD to run the plant for a compressed day, 06:00 to 06:00 in three minutes, starting from a cold core:
+
+- City demand follows a daily curve: about 140 MW overnight, a morning ramp, and about 500 MW at the evening peak, which needs the pump opened up and the rods pulled. A green band on the Output gauge shows the target.
+- Every second on target scores points. The multiplier grows by ×1 for every 10 seconds you stay in the band, up to ×5, and drops back to ×1 when you leave it.
+- **Incidents** hit every 22–35 seconds:
+  - *coolant pump failure*: cooling drops to 35%;
+  - *jammed control rod*: drawn in orange;
+  - *heatwave demand surge*: +130 MW;
+  - *turbine trip*: demand falls to 35%, which sets up a xenon pit.
+- A meltdown ends the shift and halves the score. The end card shows a star rating based on time on target. Your best score is saved in this browser (`localStorage`).
+- **Sound** (🔊 in the top bar) starts after your first click: Geiger clicks follow the neutron count, the hum rises with power, a klaxon sounds during meltdown, the rods thunk on SCRAM, and a chime marks each incident.
+
+The physics (`src/reactor.rs`) and the shift rules (`src/shift.rs`) use no web APIs, so they are unit tested natively (`cargo test --lib --features ssr`):
+- **Criticality:** withdrawn rods melt the core down, half-inserted rods hold a steady reaction, and fully inserted rods shut it down.
+- **Xenon:** xenon piles up after shutdown.
+- **Pump failure:** the core runs hotter.
+- **Shift:** incidents apply and clear, and the multiplier and demand curve behave.
+
+Sound lives in `src/audio.rs` (WebAudio, browser only).
 
 ---
 
@@ -133,6 +177,7 @@ Open http://127.0.0.1:3000
 | `cargo leptos build` | Production build (optimized WASM + binary) |
 | `cargo leptos build --release` | Full release with wasm-release profile |
 | `cargo leptos watch` | Alias for serve with file watching |
+| `cargo test --lib --features ssr` | Run the native unit tests (grid, reactor physics, shift rules) |
 
 Production output goes to `target/site/`.
 
@@ -149,9 +194,13 @@ my-leptos-app/
   .dockerignore
   .gitignore
   src/
-    app.rs                # Components, signals, WASM simulation engine
+    app.rs                # Components, signals, HUD, WASM animation loop and rendering
     lib.rs                # Crate root + WASM hydrate entry point
     main.rs               # SSR Axum server entry point
+    grid.rs               # Spatial hash shared by plexus links and reactor collisions
+    reactor.rs            # Fission chain-reaction physics (no web APIs, unit tested)
+    shift.rs              # Operator-shift game: demand curve, scoring, incidents (unit tested)
+    audio.rs              # WebAudio sound effects (hydrate only)
   style/
     main.scss             # SCSS compiled by cargo-leptos (dart-sass)
   public/                 # Static assets (favicon, etc.)
@@ -170,7 +219,7 @@ my-leptos-app/
 | `tokio` | `ssr` only | Async runtime for the server |
 | `leptos_axum` | `ssr` only | Axum <-> Leptos integration |
 | `wasm-bindgen` | `hydrate` only | Rust <-> JS interop for WASM |
-| `web-sys` | `hydrate` only | Typed browser API bindings (canvas, events) |
+| `web-sys` | `hydrate` only | Typed browser API bindings (canvas, WebAudio, localStorage) |
 | `js-sys` | `hydrate` only | JS runtime access (Math::random()) |
 | `console_error_panic_hook` | `hydrate` only | Nice panic messages in browser console |
 
@@ -310,6 +359,23 @@ features = [
     "Window",
     "MouseEvent",
     "Element",
+    "Document",
+    "CanvasGradient",
+    "Storage",
+    "AudioContext",
+    "AudioContextState",
+    "BaseAudioContext",
+    "AudioNode",
+    "AudioParam",
+    "AudioDestinationNode",
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioScheduledSourceNode",
+    "OscillatorNode",
+    "OscillatorType",
+    "GainNode",
+    "BiquadFilterNode",
+    "BiquadFilterType",
 ]
 
 [features]
@@ -378,7 +444,10 @@ lib-profile-release = "wasm-release"
 
 - SCSS file is at `style/main.scss` - compiled by dart-sass (bundled with cargo-leptos).
 - cargo-leptos hot-reloads CSS changes without a full rebuild.
-- Canvas uses semi-transparent fill (`rgba(8,8,18,0.22)`) for motion trail effect instead of `clearRect()`.
+- Trails: each frame the canvas fades toward transparent (`destination-out` with a partly transparent fill, set by the Trails slider) instead of using `clearRect()`. The fade never goes below 0.08, because lower values leave 8-bit alpha residue (ghost trails).
+- The background is pure CSS behind the transparent canvas: `.bg-nebula`, `.bg-stars-*` and `.bg-vignette` in Plexus mode, plus `.bg-cherenkov` in Reactor mode. Nebula colours are registered `@property` colours, so palette switches cross-fade. `--power` drives the Cherenkov glow brightness.
+- Meltdown adds a `.meltdown` class to `.sim-root`, which pulses a red alarm on the vignette and shakes the canvas.
+- Animations are turned off under `prefers-reduced-motion`.
 - Control panel uses `backdrop-filter: blur()` for glassmorphism.
 - Hint pill uses CSS animation (`hintFade`) to auto-hide after 4 seconds.
 
@@ -390,6 +459,11 @@ lib-profile-release = "wasm-release"
 
 ```rust
 pub mod app;
+#[cfg(feature = "hydrate")]
+pub mod audio;
+pub mod grid;
+pub mod reactor;
+pub mod shift;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -439,11 +513,21 @@ pub fn main() {}
 See file in repository. Contains:
 - `shell()` - HTML document wrapper
 - `App` component - router + stylesheet injection
-- `HomePage` component - canvas + controls + signals
+- `HomePage` component - canvas, background layers, control panel, reactor HUD, incident banner and end-of-shift card
 - `try_start()` - cfg-gated animation starter
-- `start_simulation()` - WASM-only animation loop (Closure + requestAnimationFrame); recolors particles when the palette changes
-- `hue_for()` - random hue for a palette
-- `new_particle()` - random particle constructor
+- `hue_range()` / `bucket_hue()` / `line_styles()` - palette quantized into hue/alpha buckets so colours are built once per palette
+- `glow_sprite()` / `build_sprites()` - pre-rendered radial-gradient glows (replace `shadowBlur`)
+- `start_simulation()` - WASM-only animation loop (Closure + requestAnimationFrame): HiDPI sizing, trail fade, then either the plexus or the reactor and shift, plus sound and stats sent back to the UI
+- `step_plexus()` / `draw_cursor_ring()` - plexus physics and the mouse halo
+- `draw_reactor()` - renders rods (jammed rod in orange), nuclei, fission glow, shock rings and neutron streaks
+- `load_best()` / `save_best()` - best shift score in `localStorage`
+
+### Other modules
+
+- `Reactor` (`src/reactor.rs`) - fission chain-reaction physics: nuclei, neutrons, control rods, coolant pump, xenon, temperature, SCRAM and meltdown
+- `Shift` (`src/shift.rs`) - demand curve, scoring, multiplier and incidents
+- `Grid` (`src/grid.rs`) - reusable spatial hash shared by the plexus links and reactor collisions
+- `Sound` (`src/audio.rs`) - Geiger clicks, hum, klaxon, SCRAM thunk and incident chime
 
 ---
 

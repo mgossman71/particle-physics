@@ -1,4 +1,9 @@
 pub mod app;
+#[cfg(feature = "hydrate")]
+pub mod audio;
+pub mod grid;
+pub mod reactor;
+pub mod shift;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
