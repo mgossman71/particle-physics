@@ -1,6 +1,6 @@
 ﻿# Particle Physics - Rust + Leptos Full-Stack Web App
 
-Interactive particle simulation running at 60fps in the browser, compiled from Rust to WebAssembly via Leptos 0.8.
+Interactive particle simulation running at 60fps in the browser, compiled from Rust to WebAssembly via Leptos 0.8. It handles 2,500 particles: a spatial grid finds the links, lines are drawn in colour batches, and glows come from pre-rendered sprites with additive blending. The canvas renders sharply on HiDPI screens.
 
 ```
 +-----------------------------------------------------------+
@@ -13,9 +13,10 @@ Interactive particle simulation running at 60fps in the browser, compiled from R
 |      .--.        .           .--.                         |
 |                                                           |
 |                                   +--------------+        |
-|                                   | Particles  160|        |
+|                                   | Particles  300|        |
 |                                   | Link Range 115|        |
 |                                   | Speed      1.0|        |
+|                                   | Trails     62%|        |
 |                                   | [Neon][Fire][Ocean]   |
 |                                   |  [+ Attract]  |        |
 |                                   +--------------+        |
@@ -23,6 +24,43 @@ Interactive particle simulation running at 60fps in the browser, compiled from R
 ```
 
 **Open at:** http://localhost:8080 (Docker) or http://127.0.0.1:3000 (`cargo leptos serve`)
+
+---
+
+## Reactor mode
+
+Switch the panel to **☢ Reactor** to run a toy fission chain reaction:
+
+- **Fuel nuclei** (green) jostle and bounce off each other. When a **neutron** (blue streak) hits one, it may split. The nucleus is flung away glowing hot and turns grey (spent) until it refuels, and 2–3 new neutrons fly out. Hot nuclei hit their neighbours harder and pass the glow on.
+- Neutrons that miss lose speed with each bounce (moderation), and slow neutrons are much likelier to cause fission. Spent nuclei sometimes swallow neutrons (poisoning), and neutrons that reach the screen edge leak away.
+- **Control rods** hang from the top and absorb neutrons. Lowering them is how you slow the reaction. **SCRAM** drops them all the way in at once.
+- The HUD shows status (shutdown / subcritical / critical / supercritical), core temperature, power in fissions per second, neutron count and the actual rod position. The blue Cherenkov glow behind the core brightens with power.
+- Above 1200°C the core **melts down**: alarms flash, the screen shakes and the reactor auto-SCRAMs. You can't reset it until the core cools below 700°C.
+- Click anywhere to fire a burst of neutrons.
+- **Coolant pump:** more flow cools the core faster but uses up to 12% of the electrical output.
+- **Xenon-135 poisoning:** fission makes iodine, which decays into neutron-absorbing xenon. Running at power burns xenon off. Cutting power stops the burn-off, so xenon piles up and the core goes sluggish for a while (the "xenon pit").
+
+### Operator shift (the game)
+
+Press **▶ Start shift** in the reactor HUD to run the plant for a compressed day, 06:00 to 06:00 in three minutes, starting from a cold core:
+
+- City demand follows a daily curve: about 140 MW overnight, a morning ramp, and about 500 MW at the evening peak, which needs the pump opened up and the rods pulled. A green band on the Output gauge shows the target.
+- Every second on target scores points. The multiplier grows by ×1 for every 10 seconds you stay in the band, up to ×5, and drops back to ×1 when you leave it.
+- **Incidents** hit every 22–35 seconds:
+  - *coolant pump failure*: cooling drops to 35%;
+  - *jammed control rod*: drawn in orange;
+  - *heatwave demand surge*: +130 MW;
+  - *turbine trip*: demand falls to 35%, which sets up a xenon pit.
+- A meltdown ends the shift and halves the score. The end card shows a star rating based on time on target. Your best score is saved in this browser (`localStorage`).
+- **Sound** (🔊 in the top bar) starts after your first click: Geiger clicks follow the neutron count, the hum rises with power, a klaxon sounds during meltdown, the rods thunk on SCRAM, and a chime marks each incident.
+
+The physics (`src/reactor.rs`) and the shift rules (`src/shift.rs`) use no web APIs, so they are unit tested natively (`cargo test --lib --features ssr`):
+- **Criticality:** withdrawn rods melt the core down, half-inserted rods hold a steady reaction, and fully inserted rods shut it down.
+- **Xenon:** xenon piles up after shutdown.
+- **Pump failure:** the core runs hotter.
+- **Shift:** incidents apply and clear, and the multiplier and demand curve behave.
+
+Sound lives in `src/audio.rs` (WebAudio, browser only).
 
 ---
 
@@ -441,9 +479,18 @@ See file in repository. Contains:
 - `App` component - router + stylesheet injection
 - `HomePage` component - canvas + controls + signals
 - `try_start()` - cfg-gated animation starter
-- `start_simulation()` - WASM-only animation loop (Closure + requestAnimationFrame); recolors particles when the palette changes
-- `hue_for()` - random hue for a palette
+- `hue_range()` / `bucket_hue()` / `line_styles()` - palette quantized into hue/alpha buckets so colours are built once per palette
+- `build_sprites()` - pre-rendered radial-gradient glow per hue bucket (replaces `shadowBlur`)
+- `start_simulation()` - WASM-only animation loop (Closure + requestAnimationFrame): HiDPI sizing, spatial-grid link search, batched line strokes, additive blending, cursor glow ring
 - `new_particle()` - random particle constructor
+- `draw_reactor()` - renders rods, nuclei, fission glow, shock rings and neutron streaks
+
+### src/reactor.rs / src/grid.rs
+
+- `Reactor` - fission chain-reaction physics (nuclei, neutrons, control rods, temperature, SCRAM/meltdown)
+- `Grid` - reusable spatial hash shared by the plexus links and reactor collisions
+- `Shift` (`src/shift.rs`) - demand curve, scoring, multiplier and incidents
+- `Sound` (`src/audio.rs`) - Geiger clicks, hum, klaxon, SCRAM thunk and incident chime
 
 ---
 

@@ -27,6 +27,23 @@ features = [
     "Window",
     "MouseEvent",
     "Element",
+    "Document",
+    "CanvasGradient",
+    "Storage",
+    "AudioContext",
+    "AudioContextState",
+    "BaseAudioContext",
+    "AudioNode",
+    "AudioParam",
+    "AudioDestinationNode",
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioScheduledSourceNode",
+    "OscillatorNode",
+    "OscillatorType",
+    "GainNode",
+    "BiquadFilterNode",
+    "BiquadFilterType",
 ]
 
 [features]
