@@ -1,6 +1,11 @@
 ﻿# Particle Physics - Rust + Leptos Full-Stack Web App
 
-Interactive particle simulation running at 60fps in the browser, compiled from Rust to WebAssembly via Leptos 0.8. It handles 2,500 particles: a spatial grid finds the links, lines are drawn in colour batches, and glows come from pre-rendered sprites with additive blending. The canvas renders sharply on HiDPI screens.
+Interactive particle simulation running at 60fps in the browser, compiled from Rust to WebAssembly via Leptos 0.8. It has two modes:
+
+- **✦ Plexus:** up to 2,500 glowing particles linked by lines and pushed around by the mouse. A spatial grid finds the links, lines are drawn in colour batches, and glows come from pre-rendered sprites with additive blending. The canvas renders sharply on HiDPI screens.
+- **☢ Reactor:** a toy nuclear fission chain reaction you control with rods, a coolant pump and SCRAM. It includes a three-minute operator-shift game and sound (see [Reactor mode](#reactor-mode)).
+
+Behind both modes the canvas is transparent and sits over a CSS background: a drifting, palette-tinted nebula, a two-depth parallax starfield, a vignette and film grain.
 
 ```
 +-----------------------------------------------------------+
@@ -13,6 +18,7 @@ Interactive particle simulation running at 60fps in the browser, compiled from R
 |      .--.        .           .--.                         |
 |                                                           |
 |                                   +--------------+        |
+|                                   |[Plexus][Reactor]       |
 |                                   | Particles  300|        |
 |                                   | Link Range 115|        |
 |                                   | Speed      1.0|        |
@@ -171,6 +177,7 @@ Open http://127.0.0.1:3000
 | `cargo leptos build` | Production build (optimized WASM + binary) |
 | `cargo leptos build --release` | Full release with wasm-release profile |
 | `cargo leptos watch` | Alias for serve with file watching |
+| `cargo test --lib --features ssr` | Run the native unit tests (grid, reactor physics, shift rules) |
 
 Production output goes to `target/site/`.
 
@@ -187,9 +194,13 @@ my-leptos-app/
   .dockerignore
   .gitignore
   src/
-    app.rs                # Components, signals, WASM simulation engine
+    app.rs                # Components, signals, HUD, WASM animation loop and rendering
     lib.rs                # Crate root + WASM hydrate entry point
     main.rs               # SSR Axum server entry point
+    grid.rs               # Spatial hash shared by plexus links and reactor collisions
+    reactor.rs            # Fission chain-reaction physics (no web APIs, unit tested)
+    shift.rs              # Operator-shift game: demand curve, scoring, incidents (unit tested)
+    audio.rs              # WebAudio sound effects (hydrate only)
   style/
     main.scss             # SCSS compiled by cargo-leptos (dart-sass)
   public/                 # Static assets (favicon, etc.)
@@ -208,7 +219,7 @@ my-leptos-app/
 | `tokio` | `ssr` only | Async runtime for the server |
 | `leptos_axum` | `ssr` only | Axum <-> Leptos integration |
 | `wasm-bindgen` | `hydrate` only | Rust <-> JS interop for WASM |
-| `web-sys` | `hydrate` only | Typed browser API bindings (canvas, events) |
+| `web-sys` | `hydrate` only | Typed browser API bindings (canvas, WebAudio, localStorage) |
 | `js-sys` | `hydrate` only | JS runtime access (Math::random()) |
 | `console_error_panic_hook` | `hydrate` only | Nice panic messages in browser console |
 
@@ -348,6 +359,23 @@ features = [
     "Window",
     "MouseEvent",
     "Element",
+    "Document",
+    "CanvasGradient",
+    "Storage",
+    "AudioContext",
+    "AudioContextState",
+    "BaseAudioContext",
+    "AudioNode",
+    "AudioParam",
+    "AudioDestinationNode",
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioScheduledSourceNode",
+    "OscillatorNode",
+    "OscillatorType",
+    "GainNode",
+    "BiquadFilterNode",
+    "BiquadFilterType",
 ]
 
 [features]
@@ -416,7 +444,10 @@ lib-profile-release = "wasm-release"
 
 - SCSS file is at `style/main.scss` - compiled by dart-sass (bundled with cargo-leptos).
 - cargo-leptos hot-reloads CSS changes without a full rebuild.
-- Canvas uses semi-transparent fill (`rgba(8,8,18,0.22)`) for motion trail effect instead of `clearRect()`.
+- Trails: each frame the canvas fades toward transparent (`destination-out` with a partly transparent fill, set by the Trails slider) instead of using `clearRect()`. The fade never goes below 0.08, because lower values leave 8-bit alpha residue (ghost trails).
+- The background is pure CSS behind the transparent canvas: `.bg-nebula`, `.bg-stars-*` and `.bg-vignette` in Plexus mode, plus `.bg-cherenkov` in Reactor mode. Nebula colours are registered `@property` colours, so palette switches cross-fade. `--power` drives the Cherenkov glow brightness.
+- Meltdown adds a `.meltdown` class to `.sim-root`, which pulses a red alarm on the vignette and shakes the canvas.
+- Animations are turned off under `prefers-reduced-motion`.
 - Control panel uses `backdrop-filter: blur()` for glassmorphism.
 - Hint pill uses CSS animation (`hintFade`) to auto-hide after 4 seconds.
 
@@ -428,6 +459,11 @@ lib-profile-release = "wasm-release"
 
 ```rust
 pub mod app;
+#[cfg(feature = "hydrate")]
+pub mod audio;
+pub mod grid;
+pub mod reactor;
+pub mod shift;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -477,19 +513,20 @@ pub fn main() {}
 See file in repository. Contains:
 - `shell()` - HTML document wrapper
 - `App` component - router + stylesheet injection
-- `HomePage` component - canvas + controls + signals
+- `HomePage` component - canvas, background layers, control panel, reactor HUD, incident banner and end-of-shift card
 - `try_start()` - cfg-gated animation starter
 - `hue_range()` / `bucket_hue()` / `line_styles()` - palette quantized into hue/alpha buckets so colours are built once per palette
-- `build_sprites()` - pre-rendered radial-gradient glow per hue bucket (replaces `shadowBlur`)
-- `start_simulation()` - WASM-only animation loop (Closure + requestAnimationFrame): HiDPI sizing, spatial-grid link search, batched line strokes, additive blending, cursor glow ring
-- `new_particle()` - random particle constructor
-- `draw_reactor()` - renders rods, nuclei, fission glow, shock rings and neutron streaks
+- `glow_sprite()` / `build_sprites()` - pre-rendered radial-gradient glows (replace `shadowBlur`)
+- `start_simulation()` - WASM-only animation loop (Closure + requestAnimationFrame): HiDPI sizing, trail fade, then either the plexus or the reactor and shift, plus sound and stats sent back to the UI
+- `step_plexus()` / `draw_cursor_ring()` - plexus physics and the mouse halo
+- `draw_reactor()` - renders rods (jammed rod in orange), nuclei, fission glow, shock rings and neutron streaks
+- `load_best()` / `save_best()` - best shift score in `localStorage`
 
-### src/reactor.rs / src/grid.rs
+### Other modules
 
-- `Reactor` - fission chain-reaction physics (nuclei, neutrons, control rods, temperature, SCRAM/meltdown)
-- `Grid` - reusable spatial hash shared by the plexus links and reactor collisions
+- `Reactor` (`src/reactor.rs`) - fission chain-reaction physics: nuclei, neutrons, control rods, coolant pump, xenon, temperature, SCRAM and meltdown
 - `Shift` (`src/shift.rs`) - demand curve, scoring, multiplier and incidents
+- `Grid` (`src/grid.rs`) - reusable spatial hash shared by the plexus links and reactor collisions
 - `Sound` (`src/audio.rs`) - Geiger clicks, hum, klaxon, SCRAM thunk and incident chime
 
 ---
